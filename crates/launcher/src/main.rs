@@ -12,6 +12,7 @@ use crate::{game::Game, steam::require_steam, writer::MakeWriterWrapper};
 
 mod game;
 mod steam;
+mod wine;
 mod writer;
 
 pub type LauncherResult<T> = eyre::Result<T>;
