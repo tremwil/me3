@@ -33,7 +33,11 @@ use windows::{
     },
 };
 
-use crate::{writer::MakeWriterWrapper, LauncherResult};
+use crate::{
+    wine::{is_running_wine, UnixEnvGuard},
+    writer::MakeWriterWrapper,
+    LauncherResult,
+};
 
 pub struct Game {
     pub(crate) child: std::process::Child,
@@ -70,6 +74,25 @@ impl Game {
             .stderr(Stdio::null());
 
         let bridge = Arc::new(me3_ipc::bridge::to_child(32, &mut command)?);
+
+        // Under Wine, when running the Proton steam.exe launcher wrapper, it will load the
+        // steamclient DLL (which will in turn load the Linux steamclient). On successful API
+        // initialization, it will set the Unix LC_ALL env var to "C", causing child process
+        // (the game, or in this case the me3 launcher) Wine harnesses to use ANSI as the host
+        // code page.
+        //
+        // This is a *very* dubious decision, since it completely breaks Wine support for non
+        // ANSI paths, and is supposedly done for "game compatibility". We fix this by using
+        // more dubious Proton hackery, and use an ntdll export they added to temporarily
+        // unset LC_ALL.
+        let _unix_env_guard = is_running_wine().then(|| {
+            tracing::info!("overriding Wine host locale to support non-ANSI package paths");
+            unsafe { UnixEnvGuard::new(c"LC_ALL", None) }.inspect_err(|e| {
+                tracing::warn!(
+                    "overriding LC_ALL failed: {e}. This may lead to packages under non-ANSI paths failing to load."
+                )
+            })
+        });
 
         let child = command.spawn().map_err(|e| match e.raw_os_error().map(|i| WIN32_ERROR(i as u32)) {
             Some(ERROR_ELEVATION_REQUIRED) => eyre!(
